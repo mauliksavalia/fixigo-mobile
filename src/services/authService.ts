@@ -1,8 +1,28 @@
-import { saveAuth, clearAuth, getUser, getToken, StoredUser } from "../storage/authStorage";
+import { clearAuth, getToken, getUser, saveAuth, StoredUser } from "../storage/authStorage";
+import { signInWithGoogleSupabase } from "./supabase/auth";
+import { isSupabaseConfigured } from "./supabase/client";
+
+export type AuthProvider = "google" | "email";
+
+export type PendingIdentity = {
+  email: string;
+  provider: AuthProvider;
+};
+
+export type AccountProfileInput = {
+  email: string;
+  provider: AuthProvider;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  code: string;
+};
 
 function fakeDelay(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+const MOCK_OTP_CODE = "123456";
 
 export async function bootstrapAuth() {
   const token = await getToken();
@@ -10,27 +30,112 @@ export async function bootstrapAuth() {
   return { token, user };
 }
 
-export async function loginWithEmail(email: string, password: string) {
-  await fakeDelay(700);
+export function normalizePhoneNumber(phone: string) {
+  const digits = phone.replace(/\D/g, "");
 
-  // Mock validation
-  if (!email.includes("@") || password.length < 4) {
-    throw new Error("Invalid email or password (mock).");
+  if (digits.length === 10) {
+    return `+1${digits}`;
   }
 
-  const token = `mock_token_${Date.now()}`;
-  const user: StoredUser = { id: "mock-user-1", email, name: "Fixigo Customer" };
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
 
+  return phone.trim();
+}
+
+export function formatPhoneForDisplay(phone: string) {
+  const digits = phone.replace(/\D/g, "");
+  const localDigits = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+
+  if (localDigits.length !== 10) {
+    return phone;
+  }
+
+  return `(${localDigits.slice(0, 3)}) ${localDigits.slice(3, 6)}-${localDigits.slice(6)}`;
+}
+
+function assertEmail(email: string) {
+  const trimmed = email.trim().toLowerCase();
+
+  if (!/^\S+@\S+\.\S+$/.test(trimmed)) {
+    throw new Error("Please enter a valid email address.");
+  }
+
+  return trimmed;
+}
+
+function assertName(value: string, label: string) {
+  const trimmed = value.trim();
+
+  if (trimmed.length < 2) {
+    throw new Error(`${label} must be at least 2 characters.`);
+  }
+
+  return trimmed;
+}
+
+function assertPhone(phone: string) {
+  const normalized = normalizePhoneNumber(phone);
+
+  if (!/^\+1\d{10}$/.test(normalized)) {
+    throw new Error("Please enter a valid U.S. mobile number.");
+  }
+
+  return normalized;
+}
+
+export async function startEmailIdentityMock(email: string, provider: AuthProvider) {
+  await fakeDelay(450);
+
+  return {
+    email: assertEmail(email),
+    provider,
+  };
+}
+
+export function canUseRealGoogleLogin() {
+  return isSupabaseConfigured;
+}
+
+export async function loginWithGoogle() {
+  const { token, user } = await signInWithGoogleSupabase();
   await saveAuth(token, user);
   return { token, user };
 }
 
-export async function loginWithGoogleMock() {
-  await fakeDelay(700);
+export async function requestPhoneOtpMock(phone: string) {
+  await fakeDelay(550);
+  const normalizedPhone = assertPhone(phone);
 
-  // This is mock. Later you’ll integrate real Google Auth.
-  const token = `mock_google_token_${Date.now()}`;
-  const user: StoredUser = { id: "mock-google-1", email: "customer@gmail.com", name: "Google Customer" };
+  return {
+    phone: normalizedPhone,
+    code: MOCK_OTP_CODE,
+    expiresAt: Date.now() + 5 * 60 * 1000,
+  };
+}
+
+export async function verifyProfileOtpAndLogin(input: AccountProfileInput) {
+  await fakeDelay(650);
+
+  if (input.code.trim() !== MOCK_OTP_CODE) {
+    throw new Error("That verification code is not correct. Use 123456 for this demo.");
+  }
+
+  const firstName = assertName(input.firstName, "First name");
+  const lastName = assertName(input.lastName, "Last name");
+  const email = assertEmail(input.email);
+  const phone = assertPhone(input.phone);
+  const token = `mock_customer_token_${Date.now()}`;
+  const user: StoredUser = {
+    id: `customer_${Date.now()}`,
+    email,
+    firstName,
+    lastName,
+    name: `${firstName} ${lastName}`,
+    phone,
+    authProvider: input.provider,
+  };
 
   await saveAuth(token, user);
   return { token, user };
